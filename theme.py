@@ -11,4 +11,10 @@ TEXT_DIM  = "#6b7094"
 TEXT_SEL  = "#ffffff"
 CHIP_BG   = "#252838"
 
+# ANR 스레드 상태별 색상
+ANR_BLOCKED = "#f76b6b"     # Blocked / Monitor  (의심 1순위)
+ANR_WAIT    = "#f7d94f"     # Waiting / TimedWaiting / Sleeping
+ANR_RUN     = "#8ad48a"     # Runnable / Native
+ANR_DIM     = TEXT_DIM      # 그 외 / Suspended
+
 FONT = "Consolas"          # 기본 폰트 (모노스페이스)

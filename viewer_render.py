@@ -37,7 +37,7 @@ class RenderMixin:
         self.result_label.config(text=f"글씨 크기 {size}pt")
 
     # ── 필터 적용 ────────────────────────────────────────
-    def apply_filter(self):
+    def apply_filter(self, progress=None):
         if not self.rows:
             return
         active_sections = {s for s, v in self.section_vars.items() if v.get()}
@@ -71,12 +71,12 @@ class RenderMixin:
         if hidden > self.ELIDE_HIDDEN_LIMIT:
             if shown > 4000:
                 self._busy()
-            self._render_subset(visible, keyword, active_procs)
+            self._render_subset(visible, keyword, active_procs, progress)
         else:
             if not self.widget_full:
                 if len(self.rows) > 4000:
                     self._busy()
-                self._render_full()
+                self._render_full(progress)
             self._apply_elide(visible)
             self._apply_highlights(visible, keyword, active_procs)
 
@@ -126,9 +126,10 @@ class RenderMixin:
             text=f"{self._shown}줄  ·  {self._match_idx + 1}/{total}")
 
     # ── 전체 행 1회 삽입 + 정적 태그 (elide 모드 전제) ─────
-    def _render_full(self):
+    def _render_full(self, progress=None):
         """인식된 섹션 줄 '전체'를 Text에 삽입하고 필터 무관 정적 태그(섹션 헤더
-        색, 컴포넌트 TAG 색)를 적용. 넓은 결과를 elide로 토글하기 위한 베이스."""
+        색, 컴포넌트 TAG 색)를 적용. 넓은 결과를 elide로 토글하기 위한 베이스.
+        progress(frac): 태그 적용 진행률(0~1)을 보고하는 선택 콜백."""
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         big = "".join(
@@ -136,6 +137,8 @@ class RenderMixin:
             for r in self.rows
         )
         self.log_text.insert("1.0", big)
+        n = len(self.rows)
+        step = max(1, n // 100)            # 진행 콜백 ~100회로 제한
         for idx, r in enumerate(self.rows):
             ln = idx + 1
             if r.header:
@@ -145,11 +148,15 @@ class RenderMixin:
                 if col >= 0:
                     self.log_text.tag_add(
                         "component", f"{ln}.{col}", f"{ln}.{col + len(r.logtag)}")
+            if progress and idx % step == 0:
+                progress(idx / n)
+        if progress:
+            progress(1.0)
         self.log_text.config(state="disabled")
         self.widget_full = True
 
     # ── 보이는 줄만 새로 삽입 (no elide → 스크롤 매끈) ─────
-    def _render_subset(self, visible, keyword, active_procs):
+    def _render_subset(self, visible, keyword, active_procs, progress=None):
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
 
@@ -158,7 +165,11 @@ class RenderMixin:
         hdr_lines = []
         ln = 1
         prev = None
+        n = len(self.rows)
+        step = max(1, n // 100)            # 진행 콜백 ~100회로 제한 (전체 스캔 0~0.7)
         for idx, r in enumerate(self.rows):
+            if progress and idx % step == 0:
+                progress(0.7 * idx / n)
             if r.header or not visible[idx]:
                 continue
             if r.section != prev:
@@ -173,7 +184,11 @@ class RenderMixin:
 
         for hl in hdr_lines:
             self.log_text.tag_add("section_hdr", f"{hl}.0", f"{hl + 1}.0")
-        for ln, r in meta:
+        m = len(meta)
+        mstep = max(1, m // 100)
+        for j, (ln, r) in enumerate(meta):
+            if progress and j % mstep == 0:
+                progress(0.7 + 0.3 * j / m)    # 태그/강조 단계 0.7~1.0
             if r.section in SECTION_COMPONENTS and r.logtag:
                 col = r.text.find(r.logtag)
                 if col >= 0:
@@ -183,6 +198,8 @@ class RenderMixin:
                 self._highlight_all(r.text_lower, keyword, ln, "search_hl")
             for p in active_procs:
                 self._highlight_all(r.text, p, ln, "proc_hl")
+        if progress:
+            progress(1.0)
 
         self.log_text.config(state="disabled")
         self.widget_full = False

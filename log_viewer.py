@@ -1,6 +1,6 @@
 import os
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import dumpstate_parser as dp
 from dumpstate_config import SECTIONS
@@ -8,6 +8,11 @@ from theme import (BG, PANEL, BORDER, ACCENT, TEXT, TEXT_DIM, TEXT_SEL, CHIP_BG,
 from time_filter import TimeRangeFilter
 from viewer_sidebar import SidebarMixin
 from viewer_render import RenderMixin
+from anr_view import AnrWindow
+from progress_dialog import ProgressDialog
+
+# ANR 분석 대상 VM TRACES 섹션 (기본부터 순서대로)
+ANR_SECTIONS = ["VM TRACES AT LAST ANR", "VM TRACES JUST NOW"]
 
 
 class LogViewerApp(SidebarMixin, RenderMixin):
@@ -91,6 +96,11 @@ class LogViewerApp(SidebarMixin, RenderMixin):
                   font=(FONT, 9, "bold"), padx=p(12), pady=p(6), cursor="hand2",
                   activebackground=BORDER, activeforeground=TEXT_SEL,
                   command=self.show_headers).pack(side="left", padx=p((0, 10)), pady=p(10))
+
+        tk.Button(toolbar, text="ANR 분석", bg=CHIP_BG, fg=TEXT, relief="flat",
+                  font=(FONT, 9, "bold"), padx=p(12), pady=p(6), cursor="hand2",
+                  activebackground=BORDER, activeforeground=TEXT_SEL,
+                  command=self.open_anr).pack(side="left", padx=p((0, 10)), pady=p(10))
 
         self.file_label = tk.Label(toolbar, text="파일을 열어주세요", bg=PANEL,
                                    fg=TEXT_DIM, font=(FONT, 9))
@@ -200,14 +210,43 @@ class LogViewerApp(SidebarMixin, RenderMixin):
         if not path:
             return
         self.file_label.config(text=os.path.basename(path))
-        self.dump.load(path)
-        self.dump.parse(SECTIONS)
-        self.rows = self.dump.build_display(SECTIONS)
-        self.widget_full = False
-        self._update_counts()
-        self._build_proc_rows()
-        self.apply_filter()
+        prog = ProgressDialog(self.root, self._p)
+        try:
+            prog.set("파일 읽는 중", 0.0)
+            self.dump.load(path)
+            self.dump.parse(
+                SECTIONS,
+                progress=lambda d, t: prog.set("섹션 분석 중", 0.05 + 0.30 * d / (t or 1)))
+            self.rows = self.dump.build_display(
+                SECTIONS,
+                progress=lambda d, t: prog.set("로그 정리 중", 0.35 + 0.25 * d / (t or 1)))
+            self.widget_full = False
+            self._update_counts()
+            self._build_proc_rows()
+            self.apply_filter(
+                progress=lambda f: prog.set("화면 렌더링 중", 0.60 + 0.40 * f))
+            prog.set("완료", 1.0)
+        finally:
+            prog.close()
         self._print_headers_to_console()
+
+    # ── ANR 분석 창 열기 ─────────────────────────────────
+    def open_anr(self):
+        if not self.dump.lines:
+            messagebox.showinfo("ANR 분석", "파일을 먼저 열어주세요.")
+            return
+        traces = {}
+        for sec in ANR_SECTIONS:
+            procs = dp.parse_anr_traces(self.dump.section_lines(sec))
+            if procs:
+                traces[sec] = procs
+        if not traces:
+            messagebox.showinfo(
+                "ANR 분석",
+                "VM TRACES 섹션을 찾지 못했어요.\n"
+                "('VM TRACES AT LAST ANR' / 'VM TRACES JUST NOW')")
+            return
+        AnrWindow(self.root, traces, self._p)
 
 
 def _enable_dpi_awareness():

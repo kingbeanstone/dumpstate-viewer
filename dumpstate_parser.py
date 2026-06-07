@@ -122,12 +122,14 @@ class Dump:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             self.lines = f.readlines()
 
-    def parse(self, sections):
+    def parse(self, sections, progress=None):
         self.line_sections = []
         self.discovered = []
         seen = set()
         current = None
-        for line in self.lines:
+        total = len(self.lines)
+        step = max(1, total // 200)        # 진행 콜백 ~200회로 제한
+        for i, line in enumerate(self.lines):
             name = section_name_from_header(line)
             if name is not None:
                 current = match_section(name, sections)
@@ -138,6 +140,10 @@ class Dump:
                 current = None  # 섹션 종료라인에서만 리셋
             # 그 외(대시로 시작하지만 헤더가 아닌 줄 등)는 current 유지
             self.line_sections.append(current)
+            if progress and i % step == 0:
+                progress(i, total)
+        if progress and total:
+            progress(total, total)
 
     def section_counts(self, sections):
         counts = {s: 0 for s in sections}
@@ -164,7 +170,12 @@ class Dump:
         return sum(1 for line, sec in zip(self.lines, self.line_sections)
                    if sec is not None and name in line)
 
-    def build_display(self, sections):
+    def section_lines(self, name):
+        """주어진 섹션에 속한 원본 줄들을 순서대로 반환."""
+        return [line for line, sec in zip(self.lines, self.line_sections)
+                if sec == name]
+
+    def build_display(self, sections, progress=None):
         """화면 표시용 행 리스트를 1회 생성(파일 순서).
 
         반환: Row 리스트. 인식된 섹션 줄만 포함하며, 섹션이 시작될 때마다
@@ -173,7 +184,11 @@ class Dump:
         """
         rows = []
         prev_sec = None
-        for line, sec in zip(self.lines, self.line_sections):
+        total = len(self.lines)
+        step = max(1, total // 200)        # 진행 콜백 ~200회로 제한
+        for i, (line, sec) in enumerate(zip(self.lines, self.line_sections)):
+            if progress and i % step == 0:
+                progress(i, total)
             if sec is None:
                 continue
             if sec != prev_sec:
@@ -183,6 +198,8 @@ class Dump:
             rows.append(Row(section=sec, header=False, text=text,
                             text_lower=text.lower(), logtag=logcat_tag(line),
                             tms=parse_line_time(line)))
+        if progress and total:
+            progress(total, total)
         return rows
 
     @staticmethod
@@ -220,3 +237,93 @@ class Dump:
             if end_ms is not None and row.tms > end_ms:
                 return False
         return True
+
+
+# ──────────────────────────────────────────────────────────
+# VM TRACES (ANR) 파싱 — ART/Dalvik 스레드 덤프를 프로세스▸스레드 구조로
+# ──────────────────────────────────────────────────────────
+#  "----- pid 12345 at 2024-... -----"  프로세스 시작
+#  "Cmd line: com.example.app"          프로세스 이름
+#  "DALVIK THREADS (N):"                스레드 목록 시작
+#  '"main" prio=5 tid=1 Native'         스레드 헤더(열 0의 따옴표)
+#    | group=... / native: ... / at ...  들여쓴 메타·스택 프레임
+#  "----- end 12345 -----"              프로세스 끝
+PROC_START_RE = re.compile(r"^-----\s+pid\s+(\d+)\s+at\s+(.+?)\s+-----\s*$")
+PROC_END_RE = re.compile(r"^-----\s+end\s+(\d+)\s+-----\s*$")
+CMDLINE_RE = re.compile(r"^Cmd line:\s*(.+)$")
+THREAD_RE = re.compile(r'^"(?P<name>.*)"\s+(?P<rest>\S.*)$')
+THREAD_TID_RE = re.compile(r"\btid=(\d+)\b")
+
+
+class AnrThread:
+    __slots__ = ("name", "tid", "state", "lines")
+
+    def __init__(self, name, tid, state, lines):
+        self.name = name
+        self.tid = tid
+        self.state = state
+        self.lines = lines      # 헤더 + 메타 + 스택 프레임 전체(표시용)
+
+
+class AnrProcess:
+    __slots__ = ("pid", "name", "header_lines", "threads")
+
+    def __init__(self, pid, name, header_lines, threads):
+        self.pid = pid
+        self.name = name                # Cmd line (없으면 "pid N")
+        self.header_lines = header_lines  # DALVIK THREADS 이전 정보(빌드/클래스로더 등)
+        self.threads = threads
+
+
+def parse_anr_traces(lines):
+    """VM TRACES 섹션 줄들을 AnrProcess 리스트로 파싱."""
+    procs = []
+    cur_proc = None
+    cur_thread = None
+    for raw in lines:
+        line = raw.rstrip("\n")
+
+        m = PROC_START_RE.match(line)
+        if m:
+            cur_proc = AnrProcess(pid=m.group(1), name=None,
+                                  header_lines=[line], threads=[])
+            procs.append(cur_proc)
+            cur_thread = None
+            continue
+
+        if cur_proc is None:
+            continue                    # 첫 pid 라인 전(섹션 헤더/전문)은 무시
+
+        if PROC_END_RE.match(line):
+            cur_thread = None
+            continue
+
+        th = THREAD_RE.match(line)
+        if th:                          # 열 0의 따옴표 → 스레드 헤더
+            rest = th.group("rest")
+            tidm = THREAD_TID_RE.search(rest)
+            toks = rest.split()
+            cur_thread = AnrThread(
+                name=th.group("name"),
+                tid=(tidm.group(1) if tidm else ""),
+                state=(toks[-1] if toks else ""),
+                lines=[line])
+            cur_proc.threads.append(cur_thread)
+            continue
+
+        if cur_thread is not None:
+            cur_thread.lines.append(line)
+        else:                           # 스레드 시작 전 줄 → 프로세스 헤더
+            cur_proc.header_lines.append(line)
+            cm = CMDLINE_RE.match(line)
+            if cm and cur_proc.name is None:
+                cur_proc.name = cm.group(1).strip()
+
+    # 정리: 이름 폴백 + 스레드별 끝쪽 빈 줄 제거
+    for p in procs:
+        if not p.name:
+            p.name = f"pid {p.pid}"
+        for t in p.threads:
+            while t.lines and not t.lines[-1].strip():
+                t.lines.pop()
+    return procs

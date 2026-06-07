@@ -1,0 +1,35 @@
+{
+  "SYSTEM LOG": {
+    "custom": [],
+    "checked": [
+      "SurfaceFlinger",
+      "RenderEngine",
+      "BLASTSyncEngine",
+      "Layer",
+      "VRI[MainActivity]",
+      "WindowManager",
+      "InputDispatcher",
+      "ActivityManager",
+      "ActivityTaskManager",
+      "GOS",
+      "SDHMS",
+      "SurfaceComposerClient",
+      "InsetsController",
+      "InsetsSourceProvider",
+      "InsetsSourceConsumer",
+      "ImeTracker",
+      "ActivityThread",
+      "GraphicsStatsService",
+      "UsageStatsService",
+      "FreecessHandler",
+      "PerProcessNandswap"
+    ]
+  },
+  "EVENT LOG": {
+    "custom": [],
+    "checked": [
+      "am_pss",
+      "am_anr"
+    ]
+  }
+}

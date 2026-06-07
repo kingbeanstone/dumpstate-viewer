@@ -1,0 +1,66 @@
+{
+  "sections": [
+    "BINDER STATE",
+    "BINDER STATS",
+    "BLOCKED PROCESS WAIT-CHANNELS",
+    "DUMPSYS CRITICAL",
+    "EVENT LOG",
+    "PSI io",
+    "SYSTEM LOG",
+    "USB LOG",
+    "VM TRACES JUST NOW"
+  ],
+  "processes": [
+    "com.example.anr_tester",
+    "com.example.gpustressor"
+  ],
+  "components": {
+    "SYSTEM LOG": [
+      "ActivityManager",
+      "ActivityTaskManager",
+      "ActivityThread",
+      "BLASTSyncEngine",
+      "FreecessHandler",
+      "GOS",
+      "GraphicsStatsService",
+      "ImeTracker",
+      "InputDispatcher",
+      "InsetsController",
+      "InsetsSourceConsumer",
+      "InsetsSourceProvider",
+      "Layer",
+      "PerProcessNandswap",
+      "RenderEngine",
+      "SDHMS",
+      "SurfaceComposerClient",
+      "SurfaceFlinger",
+      "UsageStatsService",
+      "VRI[MainActivity]",
+      "WindowManager"
+    ],
+    "EVENT LOG": [
+      "am_activity_fully_drawn_time",
+      "am_activity_launch_time",
+      "am_anr",
+      "am_crash",
+      "am_focused_stack",
+      "am_focused_window",
+      "am_kill",
+      "am_low_memory",
+      "am_proc_bound",
+      "am_proc_died",
+      "am_proc_start",
+      "am_pss",
+      "battery_level",
+      "jank_cuj_events_begin_request",
+      "notification_cancel",
+      "notification_enqueue",
+      "power_screen_state",
+      "sysui_count",
+      "sysui_view_visibility",
+      "wm_on_paused_called",
+      "wm_on_resume_called",
+      "wm_on_stop_called"
+    ]
+  }
+}

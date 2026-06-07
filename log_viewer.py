@@ -26,7 +26,11 @@ class LogViewerApp(SidebarMixin, RenderMixin):
         self.root.minsize(int(900 * s), int(560 * s))
 
         self.dump = dp.Dump()
-        self.rows = []                     # build_display() 결과 (위젯 줄번호 = 인덱스+1)
+        self.rows = []                     # 현재 렌더 대상 행(= _rows_norm 또는 _rows_full)
+        self._rows_norm = []               # build_display() 결과(등록 섹션만)
+        self._rows_full = None             # build_display_full() 결과(전체 섹션, 첫 ALL 때 지연 생성)
+        # 그룹별 필터 바이패스(ALL 버튼). 세션 한정, 저장 안 함.
+        self._bypass = {"sections": False, "procs": False, "comps": False}
         self.widget_full = False           # 위젯에 전체 행이 들어있는지(elide 모드 전제)
         # 스크롤 렉은 '숨겨진 줄 수'에 비례한다. 숨길 줄이 이 값보다 많으면
         # 'elide'(스크롤 렉) 대신 '보이는 줄만 재렌더'(숨김 0 → 매끈)로 간다.
@@ -41,7 +45,14 @@ class LogViewerApp(SidebarMixin, RenderMixin):
         _here = os.path.dirname(os.path.abspath(__file__))
         self._proc_store_path = os.path.join(_here, "saved_processes.json")
         self._comp_store_path = os.path.join(_here, "saved_components.json")
-        self.section_count_lbls = {}
+        self._view_store_path = os.path.join(_here, "saved_views.json")
+        self.section_counts_map = {}        # 섹션 -> 줄 수 (행 재빌드 시 라벨용)
+        self._headers_win = None            # '섹션 헤더 보기' 창(싱글톤)
+        # 피커로 고른 '사이드바 표시 항목' (기본=전체, _build_* 에서 채움)
+        self.section_display = set()
+        self.proc_display = set()
+        self.comp_display = {}
+        self.all_btns = {}                 # 그룹 -> ALL 버튼(바이패스 활성 강조용)
 
         # 필터는 입력 중 값이 아니라 Enter로 '확정'된 값만 적용한다.
         self._applied_search = ""
@@ -51,6 +62,7 @@ class LogViewerApp(SidebarMixin, RenderMixin):
         self._match_idx = -1               # 검색 매치 순회 인덱스 (Enter 연타용)
         self._log_font_size = 10           # 로그 글씨 크기 (Ctrl +/- 로 조절)
 
+        self._load_saved_views()           # 피커로 고른 표시 항목 구성 복원
         self._build_ui()
         self._load_saved_processes()       # 저장해둔 프로세스명 복원
         self._build_proc_rows()
@@ -217,9 +229,12 @@ class LogViewerApp(SidebarMixin, RenderMixin):
             self.dump.parse(
                 SECTIONS,
                 progress=lambda d, t: prog.set("섹션 분석 중", 0.05 + 0.30 * d / (t or 1)))
-            self.rows = self.dump.build_display(
+            self._rows_norm = self.dump.build_display(
                 SECTIONS,
                 progress=lambda d, t: prog.set("로그 정리 중", 0.35 + 0.25 * d / (t or 1)))
+            self.rows = self._rows_norm
+            self._rows_full = None             # 새 파일 → 전체-섹션 행 지연 재생성
+            self._reset_bypass()               # 새 파일은 일반 필터 보기로
             self.widget_full = False
             self._update_counts()
             self._build_proc_rows()
@@ -229,6 +244,27 @@ class LogViewerApp(SidebarMixin, RenderMixin):
         finally:
             prog.close()
         self._print_headers_to_console()
+
+    # ── ALL(섹션 필터 끔) 전용 전체-섹션 행 지연 생성 ────
+    def _ensure_full_rows(self):
+        if self._rows_full is not None:
+            return
+        if len(self.dump.lines) > 20000:      # 큰 파일이면 진행바 표시
+            prog = ProgressDialog(self.root, self._p)
+            try:
+                self._rows_full = self.dump.build_display_full(
+                    progress=lambda d, t: prog.set("전체 섹션 준비 중", d / (t or 1)))
+            finally:
+                prog.close()
+        else:
+            self._rows_full = self.dump.build_display_full()
+
+    def _reset_bypass(self):
+        """모든 그룹 바이패스를 끄고 정상 행으로 복귀(파일 새로 열 때)."""
+        self._bypass = {"sections": False, "procs": False, "comps": False}
+        self.rows = self._rows_norm
+        for b in self.all_btns.values():
+            self._style_all_btn(b, False)
 
     # ── ANR 분석 창 열기 ─────────────────────────────────
     def open_anr(self):

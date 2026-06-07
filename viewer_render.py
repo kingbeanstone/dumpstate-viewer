@@ -37,17 +37,25 @@ class RenderMixin:
         self.result_label.config(text=f"글씨 크기 {size}pt")
 
     # ── 필터 적용 ────────────────────────────────────────
-    def apply_filter(self, progress=None):
+    def apply_filter(self, progress=None, keep_view=False):
         if not self.rows:
             return
-        active_sections = {s for s, v in self.section_vars.items() if v.get()}
-        active_procs = [p for p, v in self.proc_vars.items() if v.get()]
+        # keep_view: 재렌더 후 현재 세로 스크롤 위치를 복원(섹션 토글 등 '미세 조정'용)
+        prev_top = self.log_text.yview()[0] if keep_view else None
+        # ALL(필터 바이패스): sections=None → 섹션 무제한, procs=[] → 프로세스 무제한,
+        #                     comps → '그 줄만 보기' 모드 해제(모든 줄 통과)
+        if self._bypass["sections"]:
+            active_sections = None
+        else:
+            active_sections = {s for s, v in self.section_vars.items() if v.get()}
+        active_procs = ([] if self._bypass["procs"]
+                        else [p for p, v in self.proc_vars.items() if v.get()])
         active_comps_map = {
             sec: {c for c, v in cvars.items() if v.get()}
             for sec, cvars in self.comp_vars.items()
         }
         # 컴포넌트가 하나라도 선택되면 '그 줄만 보기' 모드 → 컴포넌트 없는 섹션 숨김
-        any_comp_selected = any(active_comps_map.values())
+        any_comp_selected = False if self._bypass["comps"] else any(active_comps_map.values())
         # 검색/시간은 입력 중 값이 아니라 Enter로 확정된 값만 사용
         keyword = self._applied_search.lower()
         start_ms = dp.parse_user_time(self._applied_tstart, is_end=False)
@@ -84,6 +92,8 @@ class RenderMixin:
         self._match_idx = -1          # 결과가 바뀌었으니 매치 순회 초기화
         self.log_text.tag_remove("cur_match", "1.0", "end")
         self.result_label.config(text=f"{shown}줄")
+        if prev_top is not None:      # 재렌더로 맨 위로 튀지 않게 위치 복원
+            self.log_text.yview_moveto(prev_top)
 
     def _busy(self):
         self.result_label.config(text="필터 적용 중…")

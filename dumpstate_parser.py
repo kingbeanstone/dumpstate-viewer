@@ -49,6 +49,10 @@ def parse_user_time(text, is_end):
 #            "--------- beginning of system"           (대시 7개 이상)
 HEADER_RE = re.compile(r"^------\s+(.+?)(?:\s+-{3,})?\s*$")
 
+# 첫 섹션 헤더 이전의 줄, 또는 섹션 종료라인 이후 줄에 붙는 합성 섹션명
+# (ALL=원본 전체 보기에서 헤더 없는 줄도 한 그룹으로 묶기 위함)
+FILE_START_SECTION = "(헤더 없음)"
+
 
 def _header_inner(line):
     """진짜 헤더면 '이름 (...)' 부분 문자열, 아니면 None."""
@@ -115,7 +119,8 @@ class Dump:
 
     def __init__(self):
         self.lines = []            # 원본 줄 전체
-        self.line_sections = []    # 각 줄이 속한 섹션명(미인식/없으면 None)
+        self.line_sections = []    # 각 줄이 속한 '등록된' 섹션명(미등록/없으면 None)
+        self.line_sections_all = []  # 각 줄의 섹션명(등록=정식명, 미등록=raw 헤더명, 첫 헤더 전=합성명)
         self.discovered = []       # 파일에서 발견된 모든 헤더 (raw_name, matched|None) - 중복 제거, 순서 유지
 
     def load(self, path):
@@ -124,22 +129,27 @@ class Dump:
 
     def parse(self, sections, progress=None):
         self.line_sections = []
+        self.line_sections_all = []
         self.discovered = []
         seen = set()
-        current = None
+        current = None          # 등록된 섹션명(미등록이면 None)
+        current_all = FILE_START_SECTION   # 모든 섹션명(미등록=raw명, 첫 헤더 전=합성명)
         total = len(self.lines)
         step = max(1, total // 200)        # 진행 콜백 ~200회로 제한
         for i, line in enumerate(self.lines):
             name = section_name_from_header(line)
             if name is not None:
                 current = match_section(name, sections)
+                current_all = current if current is not None else name
                 if name not in seen:
                     seen.add(name)
                     self.discovered.append((name, current))
             elif is_section_end(line):
                 current = None  # 섹션 종료라인에서만 리셋
+                current_all = FILE_START_SECTION
             # 그 외(대시로 시작하지만 헤더가 아닌 줄 등)는 current 유지
             self.line_sections.append(current)
+            self.line_sections_all.append(current_all)
             if progress and i % step == 0:
                 progress(i, total)
         if progress and total:
@@ -202,13 +212,35 @@ class Dump:
             progress(total, total)
         return rows
 
+    def build_display_full(self, progress=None):
+        """ALL(섹션 필터 끔) 전용: 등록 여부와 무관하게 '파일 전체 줄'을 Row로 만든다.
+        build_display 와 동일한 구조이나 line_sections_all 을 써서 미등록 섹션과
+        헤더 없는 줄까지 포함한다(미등록 Row.section = raw 헤더명)."""
+        rows = []
+        prev_sec = None
+        total = len(self.lines)
+        step = max(1, total // 200)
+        for i, (line, sec) in enumerate(zip(self.lines, self.line_sections_all)):
+            if progress and i % step == 0:
+                progress(i, total)
+            if sec != prev_sec:
+                rows.append(Row(section=sec, header=True))
+                prev_sec = sec
+            text = line.rstrip("\n")
+            rows.append(Row(section=sec, header=False, text=text,
+                            text_lower=text.lower(), logtag=logcat_tag(line),
+                            tms=parse_line_time(line)))
+        if progress and total:
+            progress(total, total)
+        return rows
+
     @staticmethod
     def content_visible(row, active_sections, active_procs,
                         active_comps_map, keyword_lower, any_comp_selected=False,
                         start_ms=None, end_ms=None):
         """내용 행 하나가 현재 필터 조건에서 보여야 하는지 판정.
 
-        active_sections   : 체크된 섹션 set
+        active_sections   : 체크된 섹션 set (None이면 섹션 필터 끔=전 섹션 통과)
         active_procs      : 체크된 프로세스명 list (OR, 비면 제한 없음)
         active_comps_map  : {섹션: 체크된 컴포넌트 set}
         keyword_lower     : 검색어(소문자), 비면 제한 없음
@@ -217,7 +249,7 @@ class Dump:
             섹션(예: DUMPSYS CRITICAL)은 통째로 숨기고, 컴포넌트가 있는 섹션은
             그 컴포넌트와 정확히 일치하는 줄만 보인다.
         """
-        if row.section not in active_sections:
+        if active_sections is not None and row.section not in active_sections:
             return False
         if active_procs and not any(p in row.text for p in active_procs):
             return False

@@ -2,54 +2,7 @@
   "SYSTEM LOG": {
     "custom": [],
     "checked": [
-      "SurfaceFlinger",
-      "RenderEngine",
-      "BLASTSyncEngine",
-      "Layer",
-      "VRI[MainActivity]",
-      "WindowManager",
-      "InputDispatcher",
-      "ActivityManager",
-      "ActivityTaskManager",
-      "GOS",
-      "SDHMS",
-      "SurfaceComposerClient",
-      "InsetsController",
-      "InsetsSourceProvider",
-      "InsetsSourceConsumer",
-      "ImeTracker",
-      "ActivityThread",
-      "GraphicsStatsService",
-      "UsageStatsService",
-      "FreecessHandler",
-      "PerProcessNandswap"
-    ]
-  },
-  "EVENT LOG": {
-    "custom": [],
-    "checked": [
-      "am_proc_start",
-      "am_proc_died",
-      "am_proc_bound",
-      "am_pss",
-      "am_anr",
-      "am_crash",
-      "am_kill",
-      "am_low_memory",
-      "am_activity_launch_time",
-      "am_activity_fully_drawn_time",
-      "am_focused_stack",
-      "am_focused_window",
-      "wm_on_resume_called",
-      "wm_on_paused_called",
-      "wm_on_stop_called",
-      "notification_enqueue",
-      "notification_cancel",
-      "power_screen_state",
-      "battery_level",
-      "sysui_view_visibility",
-      "sysui_count",
-      "jank_cuj_events_begin_request"
+      "SurfaceFlinger"
     ]
   }
 }

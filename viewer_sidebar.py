@@ -14,19 +14,54 @@ from storage import read_json, write_json
 class SidebarMixin:
     # ── 그룹: 섹션 ──────────────────────────────────────
     def _build_sections_group(self):
-        self._group_header("SECTIONS",
-                           on_cmd=lambda: self._set_all(self.section_vars, True),
-                           off_cmd=lambda: self._set_all(self.section_vars, False))
+        # 표시 항목(피커) 복원: 저장값 없으면 전체 표시
+        saved = self._saved_views.get("sections")
+        self.section_display = set(saved) if saved is not None else set(SECTIONS)
+        self._group_header(
+            "SECTIONS", group="sections",
+            on_cmd=lambda: self._set_all(self.section_vars, True, "sections"),
+            off_cmd=lambda: self._set_all(self.section_vars, False, "sections"),
+            all_cmd=lambda: self._toggle_all("sections"),
+            pick_cmd=self._open_sections_picker)
+        # 섹션 BooleanVar 는 전 섹션 1회 생성(사이드바 표시 여부와 무관하게 필터 동작)
         for sec in SECTIONS:
-            var = tk.BooleanVar(value=True)
-            self.section_vars[sec] = var
-            self.section_count_lbls[sec] = self._checkbox_row(sec, var)
+            self.section_vars[sec] = tk.BooleanVar(value=True)
+        self.section_list_frame = tk.Frame(self.sidebar, bg=PANEL)
+        self.section_list_frame.pack(fill="x")
+        self._build_section_rows()
+
+    def _build_section_rows(self):
+        """표시 집합(section_display)에 든 섹션만 체크박스 행으로 다시 그린다."""
+        p = self._p
+        if not hasattr(self, "section_list_frame"):
+            return
+        for w in self.section_list_frame.winfo_children():
+            w.destroy()
+        for sec in SECTIONS:
+            if sec not in self.section_display:
+                continue
+            row = tk.Frame(self.section_list_frame, bg=PANEL)
+            row.pack(fill="x", padx=p(8), pady=p(2))
+            tk.Checkbutton(row, text=sec, variable=self.section_vars[sec], bg=PANEL,
+                           fg=TEXT, selectcolor=CHIP_BG, activebackground=PANEL,
+                           activeforeground=TEXT_SEL, font=(FONT, 9), anchor="w",
+                           relief="flat", command=self._on_section_toggle).pack(
+                side="left", fill="x", expand=True)
+            cnt = self.section_counts_map.get(sec)
+            tk.Label(row, text="" if cnt is None else str(cnt), bg=PANEL,
+                     fg=TEXT_DIM, font=(FONT, 8)).pack(side="right", padx=p((2, 4)))
+
+    def _on_section_toggle(self):
+        self._clear_bypass("sections")
+        self.apply_filter(keep_view=True)        # 섹션 토글 시 스크롤 위치 유지
 
     # ── 그룹: 프로세스명 ─────────────────────────────────
     def _build_process_group(self):
         p = self._p
         self._divider()
-        self._group_header("PROCESS NAMES")
+        self._group_header("PROCESS NAMES", group="procs",
+                           all_cmd=lambda: self._toggle_all("procs"),
+                           pick_cmd=self._open_procs_picker)
         add_row = tk.Frame(self.sidebar, bg=PANEL)
         add_row.pack(fill="x", padx=p(12), pady=p((0, 6)))
         self.proc_entry_var = tk.StringVar()
@@ -51,6 +86,10 @@ class SidebarMixin:
             checked = self._saved_checked.get(section, set())
             for comp in self._comp_list(section):
                 self.comp_vars[section][comp] = tk.BooleanVar(value=comp in checked)
+            # 표시 항목(피커) 복원: 저장값 없으면 전체 표시
+            saved_disp = self._saved_views.get("components", {}).get(section)
+            self.comp_display[section] = (set(saved_disp) if saved_disp is not None
+                                          else set(self._comp_list(section)))
 
         keys = list(SECTION_COMPONENTS.keys())
         if not keys:
@@ -58,9 +97,11 @@ class SidebarMixin:
         self._comp_active = keys[0]
 
         self._divider()
-        self._group_header("COMPONENTS",
+        self._group_header("COMPONENTS", group="comps",
                            on_cmd=lambda: self._set_all_comps(True),
-                           off_cmd=lambda: self._set_all_comps(False))
+                           off_cmd=lambda: self._set_all_comps(False),
+                           all_cmd=lambda: self._toggle_all("comps"),
+                           pick_cmd=self._open_comps_picker)
 
         # 섹션 전환 탭 (누르면 그 섹션의 컴포넌트 리스트로 바뀜)
         tabbar = tk.Frame(self.sidebar, bg=PANEL)
@@ -117,7 +158,10 @@ class SidebarMixin:
             w.destroy()
         sec = self._comp_active
         custom = set(self.custom_comps.get(sec, []))
+        disp = self.comp_display.get(sec)        # None=전체 표시
         for comp in self._comp_list(sec):
+            if disp is not None and comp not in disp:
+                continue
             var = self.comp_vars[sec][comp]
             row = tk.Frame(self.comp_panel, bg=PANEL)
             row.pack(fill="x", padx=p(8), pady=p(2))
@@ -146,12 +190,14 @@ class SidebarMixin:
                 b.config(bg=CHIP_BG, fg=TEXT_DIM)
 
     def _set_all_comps(self, value):
+        self._clear_bypass("comps")
         for v in self.comp_vars[self._comp_active].values():
             v.set(value)
         self._save_components()
         self.apply_filter()
 
     def _on_comp_toggle(self):
+        self._clear_bypass("comps")
         self._save_components()
         self.apply_filter()
 
@@ -163,10 +209,12 @@ class SidebarMixin:
             return
         self.custom_comps.setdefault(sec, []).append(name)
         self.comp_vars[sec][name] = tk.BooleanVar(value=False)
+        self.comp_display.setdefault(sec, set()).add(name)   # 새 컴포넌트는 표시
         if self.dump.lines:           # 새 컴포넌트의 줄 수 계산
             cc = self.dump.component_counts(sec, [name])
             self.comp_counts[(sec, name)] = cc.get(name, 0)
         self._save_components()
+        self._save_views()
         self._render_comp_panel()
         self.apply_filter()
 
@@ -176,8 +224,10 @@ class SidebarMixin:
         if name in lst:
             lst.remove(name)
         self.comp_vars.get(sec, {}).pop(name, None)
+        self.comp_display.get(sec, set()).discard(name)
         self.comp_counts.pop((sec, name), None)
         self._save_components()
+        self._save_views()
         self._render_comp_panel()
         self.apply_filter()
 
@@ -203,12 +253,14 @@ class SidebarMixin:
         write_json(self._comp_store_path, data)
 
     # ── 공통 UI 헬퍼 ────────────────────────────────────
-    def _group_header(self, title, on_cmd=None, off_cmd=None):
+    def _group_header(self, title, on_cmd=None, off_cmd=None,
+                      all_cmd=None, pick_cmd=None, group=None):
         p = self._p
         hdr = tk.Frame(self.sidebar, bg=PANEL)
         hdr.pack(fill="x", padx=p(12), pady=p((14, 6)))
         tk.Label(hdr, text=title, bg=PANEL, fg=TEXT_DIM,
                  font=(FONT, 10, "bold")).pack(side="left")
+        # 오른쪽 클러스터(side=right 라 먼저 pack한 게 가장 오른쪽): OFF ON ALL 표시
         if off_cmd:
             tk.Button(hdr, text="OFF", bg=CHIP_BG, fg=TEXT, relief="flat",
                       font=(FONT, 9), padx=p(6), cursor="hand2",
@@ -217,28 +269,193 @@ class SidebarMixin:
             tk.Button(hdr, text="ON", bg=CHIP_BG, fg=TEXT, relief="flat",
                       font=(FONT, 9), padx=p(6), cursor="hand2",
                       command=on_cmd).pack(side="right", padx=p((0, 4)))
-
-    def _checkbox_row(self, name, var):
-        p = self._p
-        row = tk.Frame(self.sidebar, bg=PANEL)
-        row.pack(fill="x", padx=p(8), pady=p(2))
-        tk.Checkbutton(row, text=name, variable=var, bg=PANEL, fg=TEXT,
-                       selectcolor=CHIP_BG, activebackground=PANEL,
-                       activeforeground=TEXT_SEL, font=(FONT, 9),
-                       anchor="w", relief="flat", command=self.apply_filter).pack(
-            side="left", fill="x", expand=True)
-        cnt = tk.Label(row, text="", bg=PANEL, fg=TEXT_DIM, font=(FONT, 8))
-        cnt.pack(side="right", padx=p((2, 4)))
-        return cnt
+        if all_cmd:
+            b = tk.Button(hdr, text="ALL", bg=CHIP_BG, fg=TEXT, relief="flat",
+                          font=(FONT, 9), padx=p(6), cursor="hand2", command=all_cmd)
+            b.pack(side="right", padx=p((0, 4)))
+            if group:
+                self.all_btns[group] = b
+        if pick_cmd:
+            tk.Button(hdr, text="표시", bg=CHIP_BG, fg=ACCENT, relief="flat",
+                      font=(FONT, 9, "bold"), padx=p(6), cursor="hand2",
+                      command=pick_cmd).pack(side="right", padx=p((0, 4)))
 
     def _divider(self):
         tk.Frame(self.sidebar, bg=BORDER, height=self._p(1)).pack(
             fill="x", pady=self._p((10, 0)))
 
-    def _set_all(self, var_dict, value):
+    def _set_all(self, var_dict, value, group=None):
+        if group:
+            self._clear_bypass(group)
         for v in var_dict.values():
             v.set(value)
         self.apply_filter()
+
+    # ── ALL(필터 바이패스) 토글 ─────────────────────────
+    def _toggle_all(self, group):
+        """그 그룹의 필터를 끈다(바이패스). sections는 전체-섹션 행으로 스왑."""
+        if group == "sections":
+            self._ensure_full_rows()
+            self._bypass["sections"] = True
+            self.rows = self._rows_full
+            self.widget_full = False
+        else:
+            self._bypass[group] = True
+        if group in self.all_btns:
+            self._style_all_btn(self.all_btns[group], True)
+        self.apply_filter()
+
+    def _clear_bypass(self, group):
+        """그 그룹 바이패스를 해제(일반 필터 보기로 복귀). 호출부가 apply_filter."""
+        if not self._bypass.get(group):
+            return
+        self._bypass[group] = False
+        if group == "sections":
+            self.rows = self._rows_norm
+            self.widget_full = False
+        if group in self.all_btns:
+            self._style_all_btn(self.all_btns[group], False)
+
+    def _style_all_btn(self, btn, active):
+        if active:
+            btn.config(bg=ACCENT, fg=TEXT_SEL)
+        else:
+            btn.config(bg=CHIP_BG, fg=TEXT)
+
+    # ── 표시 항목 선택 모달(피커) — 세 그룹 공용 ─────────
+    def _open_view_picker(self, title, items, displayed, on_apply):
+        p = self._p
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.configure(bg=BG)
+        dlg.transient(self.root)
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+        w, h = p(480), p(480)
+        try:
+            px = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            py = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            dlg.geometry(f"{w}x{h}+{max(px, 0)}+{max(py, 0)}")
+        except Exception:
+            dlg.geometry(f"{w}x{h}")
+
+        tk.Label(dlg, text="사이드바에 표시할 항목 (클릭으로 선택/해제)", bg=BG, fg=TEXT,
+                 font=(FONT, 10, "bold"), anchor="w").pack(
+            fill="x", padx=p(14), pady=p((14, 2)))
+        tk.Label(dlg, text="파란색 = 표시 / 회색 = 숨김", bg=BG, fg=TEXT_DIM,
+                 font=(FONT, 8), anchor="w").pack(fill="x", padx=p(14), pady=p((0, 8)))
+
+        keys = [k for k, _ in items]
+        labels = [lbl for _, lbl in items]
+        selected = [k in displayed for k in keys]   # 현재 표시 중인 항목은 켜진 상태
+
+        # 하단 컨트롤을 먼저 side="bottom" 으로 고정 → 창이 작아지면 리스트 영역만 줄고
+        # 선택/취소 버튼은 항상 보인다.
+        def apply():
+            sel = {keys[i] for i in range(len(keys)) if selected[i]}
+            dlg.destroy()
+            on_apply(sel)
+
+        btns = tk.Frame(dlg, bg=BG)
+        btns.pack(side="bottom", fill="x", padx=p(14), pady=p(12))
+        tk.Button(btns, text="선택", bg=ACCENT, fg=TEXT_SEL, relief="flat",
+                  font=(FONT, 9, "bold"), padx=p(16), pady=p(5), cursor="hand2",
+                  activebackground="#3a7ae0", command=apply).pack(side="right")
+        tk.Button(btns, text="취소", bg=CHIP_BG, fg=TEXT, relief="flat",
+                  font=(FONT, 9, "bold"), padx=p(16), pady=p(5), cursor="hand2",
+                  activebackground=BORDER, command=dlg.destroy).pack(
+            side="right", padx=p((0, 6)))
+
+        def set_all(v):
+            for i in range(len(selected)):
+                selected[i] = v
+            render()
+
+        tools = tk.Frame(dlg, bg=BG)
+        tools.pack(side="bottom", fill="x", padx=p(14), pady=p((6, 4)))
+        tk.Button(tools, text="전체 선택", bg=CHIP_BG, fg=TEXT, relief="flat",
+                  font=(FONT, 8), padx=p(8), cursor="hand2",
+                  command=lambda: set_all(True)).pack(side="left")
+        tk.Button(tools, text="전체 해제", bg=CHIP_BG, fg=TEXT, relief="flat",
+                  font=(FONT, 8), padx=p(8), cursor="hand2",
+                  command=lambda: set_all(False)).pack(side="left", padx=p((6, 0)))
+
+        # '발견된 섹션 헤더' 창처럼 색칠된 Text 리스트(줄 클릭으로 토글) — 남은 공간 차지
+        frame = tk.Frame(dlg, bg=BG)
+        frame.pack(fill="both", expand=True, padx=p(14))
+        vsb = tk.Scrollbar(frame, orient="vertical")
+        vsb.pack(side="right", fill="y")
+        txt = tk.Text(frame, bg=PANEL, fg=TEXT, font=(FONT, 10), relief="flat",
+                      wrap="none", yscrollcommand=vsb.set, cursor="hand2",
+                      highlightthickness=0, spacing1=p(2), spacing3=p(2))
+        txt.pack(fill="both", expand=True)
+        vsb.config(command=txt.yview)
+        txt.tag_config("on", foreground=ACCENT)
+        txt.tag_config("off", foreground=TEXT_DIM)
+
+        def render():
+            txt.config(state="normal")
+            txt.delete("1.0", "end")
+            for i, lbl in enumerate(labels):
+                mark = "[✓] " if selected[i] else "[  ] "
+                txt.insert("end", mark + lbl + "\n", "on" if selected[i] else "off")
+            txt.config(state="disabled")
+
+        def on_click(e):
+            ln = int(txt.index(f"@{e.x},{e.y}").split(".")[0]) - 1
+            if 0 <= ln < len(selected):
+                selected[ln] = not selected[ln]
+                render()
+            return "break"
+
+        txt.bind("<Button-1>", on_click)
+        render()
+
+    def _open_sections_picker(self):
+        def cb(sel):
+            self.section_display = sel
+            self._clear_bypass("sections")
+            self._save_views()
+            self._build_section_rows()
+            self.apply_filter()
+        self._open_view_picker("표시할 섹션", [(s, s) for s in SECTIONS],
+                               self.section_display, cb)
+
+    def _open_procs_picker(self):
+        def cb(sel):
+            self.proc_display = sel
+            self._clear_bypass("procs")
+            self._save_views()
+            self._build_proc_rows()
+            self.apply_filter()
+        self._open_view_picker("표시할 프로세스", [(n, n) for n in self.proc_vars],
+                               self.proc_display, cb)
+
+    def _open_comps_picker(self):
+        sec = self._comp_active
+        def cb(sel):
+            self.comp_display[sec] = sel
+            self._clear_bypass("comps")
+            self._save_views()
+            self._render_comp_panel()
+            self.apply_filter()
+        self._open_view_picker("표시할 컴포넌트", [(c, c) for c in self._comp_list(sec)],
+                               self.comp_display.get(sec, set()), cb)
+
+    # ── 표시 항목 구성 저장/복원 (세션 간 유지) ──────────
+    def _load_saved_views(self):
+        data = read_json(self._view_store_path, {})
+        self._saved_views = data if isinstance(data, dict) else {}
+
+    def _save_views(self):
+        comps = {sec: sorted(s) for sec, s in self.comp_display.items()}
+        write_json(self._view_store_path, {
+            "sections": sorted(self.section_display),
+            "processes": sorted(self.proc_display),
+            "components": comps,
+        })
 
     def _scroll_sidebar(self, event):
         self.sidebar_canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -255,6 +472,9 @@ class SidebarMixin:
         for name, checked in data.items():
             if name and name not in self.proc_vars:
                 self.proc_vars[name] = tk.BooleanVar(value=bool(checked))
+        # 표시 항목(피커) 복원: 저장값 없으면 전체 표시
+        saved = self._saved_views.get("processes")
+        self.proc_display = set(saved) if saved is not None else set(self.proc_vars.keys())
 
     def _save_processes(self):
         """현재 프로세스명+체크상태를 JSON에 기록."""
@@ -263,6 +483,7 @@ class SidebarMixin:
 
     def _on_proc_toggle(self):
         """체크박스 토글 시 상태를 저장하고 필터 재적용."""
+        self._clear_bypass("procs")
         self._save_processes()
         self.apply_filter()
 
@@ -273,13 +494,17 @@ class SidebarMixin:
         if not name or name in self.proc_vars:
             return
         self.proc_vars[name] = tk.BooleanVar(value=True)
+        self.proc_display.add(name)           # 새로 추가한 프로세스는 표시
         self._save_processes()
+        self._save_views()
         self._build_proc_rows()
         self.apply_filter()
 
     def _remove_process(self, name):
         self.proc_vars.pop(name, None)
+        self.proc_display.discard(name)
         self._save_processes()
+        self._save_views()
         self._build_proc_rows()
         self.apply_filter()
 
@@ -288,6 +513,8 @@ class SidebarMixin:
         for w in self.proc_list_frame.winfo_children():
             w.destroy()
         for name, var in self.proc_vars.items():
+            if name not in self.proc_display:       # 표시 집합에 없으면 숨김
+                continue
             row = tk.Frame(self.proc_list_frame, bg=PANEL)
             row.pack(fill="x", padx=p(8), pady=p(2))
             tk.Checkbutton(row, text=name, variable=var, bg=PANEL, fg=TEXT,
@@ -306,9 +533,8 @@ class SidebarMixin:
 
     # ── 카운트 갱신 ─────────────────────────────────────
     def _update_counts(self):
-        sc = self.dump.section_counts(SECTIONS)
-        for sec, lbl in self.section_count_lbls.items():
-            lbl.config(text=str(sc.get(sec, 0)))
+        self.section_counts_map = self.dump.section_counts(SECTIONS)
+        self._build_section_rows()        # 카운트 반영해 섹션 행 다시 그림
         self.comp_counts = {}
         for section in SECTION_COMPONENTS:
             comps = self._comp_list(section)
@@ -327,10 +553,24 @@ class SidebarMixin:
 
     def show_headers(self):
         p = self._p
+        # 싱글톤: 이미 열려 있으면 그 창을 앞으로
+        if self._headers_win is not None and self._headers_win.winfo_exists():
+            self._headers_win.deiconify()
+            self._headers_win.lift()
+            self._headers_win.focus_set()
+            return
+
         win = tk.Toplevel(self.root)
+        self._headers_win = win
         win.title("발견된 섹션 헤더")
         win.configure(bg=BG)
         win.geometry(f"{p(640)}x{p(520)}")
+
+        def on_close():
+            self._headers_win = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         tk.Label(win, text="파일에 실제로 있는 섹션 헤더 목록", bg=BG, fg=ACCENT,
                  font=(FONT, 11, "bold")).pack(anchor="w", padx=p(14), pady=p((12, 2)))
         tk.Label(win, text="파란색 = 인식됨 / 회색 = 미인식.  필터하려면 이 이름을 "

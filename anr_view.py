@@ -205,7 +205,7 @@ class AnrWindow:
             self._node_meta[pitem] = ("proc", proc, None)
             # main 스레드를 맨 위로(나머지는 원래 순서 유지 — stable sort)
             for t in sorted(proc.threads, key=lambda th: th.name != "main"):
-                lbl = f"{t.name}    {t.state}    tid={t.tid}"
+                lbl = f"tid={t.tid}    {t.state}    {t.name}"
                 tags = [_state_tag(t.state)]
                 if t.name == "main":
                     tags.append("main_th")
